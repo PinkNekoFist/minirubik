@@ -1,5 +1,7 @@
 CC ?= cc
 CFLAGS ?= -O3 -std=c99 -Wall -Wextra -Wpedantic
+RISCV_CC ?= riscv64-linux-gnu-gcc
+RISCV_FLAGS ?= -march=rv32i -mabi=ilp32 -nostdlib -static -Wl,-e,main
 FRAMA_C ?= frama-c
 CLANG_FORMAT := $(shell command -v clang-format-20 2>/dev/null || \
 	command -v clang-format 2>/dev/null)
@@ -12,7 +14,7 @@ VECTORS := tests/solutions.txt
 INVALID_STATES := 1234567111111 123456711111111 02345671111111 82345671111111 \
 	12345671111110 12345671111114 1234567111111a 11345671111111 12345671111112
 
-.PHONY: all check prove clean indent
+.PHONY: all check prove clean indent gen_tables solver_proto check_proto solve_elf solver.elf
 
 all: solver mini
 
@@ -21,6 +23,32 @@ solver: solver.c
 
 mini: mini.c
 	$(CC) $(CFLAGS) $< -o $@
+
+pdb_data.s short_cache.s: gen_tables.c cube_core.h
+	$(CC) $(CFLAGS) gen_tables.c -o gen_tables
+	./gen_tables
+
+gen_tables: gen_tables.c cube_core.h
+	$(CC) $(CFLAGS) gen_tables.c -o $@
+	./gen_tables
+
+solver_proto: solver_proto.c cube_core.h pdb_data.s short_cache.s
+	$(CC) $(CFLAGS) solver_proto.c pdb_data.s short_cache.s -o $@
+
+check_proto: solver_proto $(VECTORS)
+	@while IFS='|' read -r state solution; do \
+		case "$$state" in ""|\#*) continue ;; esac; \
+		echo "Checking $$state ..."; \
+		./solver_proto "$$state"; \
+	done < $(VECTORS)
+
+solver.s: solver_core.s pdb_data.s short_cache.s
+	cat $^ > $@
+
+solver.elf: solver.s
+	$(RISCV_CC) $(RISCV_FLAGS) $< -o $@
+
+solve_elf: solver.elf
 
 check: solver mini $(VECTORS)
 	./solver --self-test
@@ -94,4 +122,4 @@ endif
 	$(CLANG_FORMAT) -i $(C_SOURCES)
 
 clean:
-	$(RM) solver mini
+	$(RM) solver mini gen_tables solver_proto solver.s solver.elf pdb_data.s short_cache.s *.o *.elf
